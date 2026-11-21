@@ -1,0 +1,55 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Форматирование
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --check
+      - name: Clippy без предупреждений
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all-targets
+        env:
+          PROPTEST_CASES: "3000"
+
+  # Минимальная поддерживаемая версия Rust собирает библиотеку и CLI
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: rustup toolchain install 1.82 --profile minimal
+      - run: cargo +1.82 build --locked
+
+  # Собранный бинарник проверяет сам себя и демонстрационный репозиторий
+  dogfood:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: cargo build --release
+      - name: Собственные инструкции без замечаний (уровень предупреждений)
+        run: ./target/release/agentsmd-lint . --fail-on warning
+      - name: Демонстрационный репозиторий даёт ошибки и код выхода 1
+        run: |
+          if ./target/release/agentsmd-lint examples/demo --format sarif > demo.sarif; then echo "ожидался код 1"; exit 1; fi
+          node -e "const s=JSON.parse(require('fs').readFileSync('demo.sarif','utf8')); if(s.version!=='2.1.0'||s.runs[0].results.length<8) process.exit(1)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: demo-sarif
+          path: demo.sarif
